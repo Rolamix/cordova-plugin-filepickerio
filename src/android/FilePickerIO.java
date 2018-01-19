@@ -4,7 +4,6 @@ import java.util.ArrayList;
 
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaPlugin;
-import org.apache.cordova.CordovaInterface;
 import org.apache.cordova.PluginResult;
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -12,26 +11,30 @@ import org.json.JSONObject;
 
 import android.app.Activity;
 import android.content.Context;
-import android.content.ContentResolver;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
-import android.provider.ContactsContract.Contacts.Data;
-import android.util.Log;
 
-import io.filepicker.Filepicker;
-import io.filepicker.models.FPFile;
+import com.filestack.Config;
+import com.filestack.android.FsActivity;
+import com.filestack.android.FsConstants;
+import com.filestack.android.Selection;
+
 
 public class FilePickerIO extends CordovaPlugin {
 
     private CallbackContext callbackContext;
-    
+
     private JSONArray executeArgs;
-    
+
     private String action;
-    
+
+    private String apiKey;
+
+    public static final int REQUEST_FILESTACK = 1000;
+
     public static final String ACTION_SET_KEY = "setKey";
-    
+
     public static final String ACTION_SET_NAME = "setName";
 
     public static final String ACTION_PICK = "pick";
@@ -39,9 +42,9 @@ public class FilePickerIO extends CordovaPlugin {
     public static final String ACTION_PICK_AND_STORE = "pickAndStore";
 
     public static final String ACTION_HAS_PERMISSION = "hasPermission";
-    
+
     private static final String LOG_TAG = "FilePickerIO";
-    
+
     public FilePickerIO() {}
 
     /**
@@ -55,7 +58,7 @@ public class FilePickerIO extends CordovaPlugin {
     public boolean execute(final String action, final JSONArray args, final CallbackContext callbackContext) throws JSONException {
         this.callbackContext = callbackContext;
         this.executeArgs = args;
-        this.action = action; 
+        this.action = action;
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || action.equals(ACTION_HAS_PERMISSION)) {
             callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.OK, hasPermission()));
             return true;
@@ -96,42 +99,39 @@ public class FilePickerIO extends CordovaPlugin {
 
     public void execute() {
         final FilePickerIO cdvPlugin = this;
-        this.cordova.getThreadPool().execute(new Runnable() {
-            public void run() {
-                try {
-                    if (ACTION_SET_KEY.equals(cdvPlugin.getAction())) {
-                        Filepicker.setKey(cdvPlugin.getArgs().getString(0));
-                        return;
-                    }
-                    if (ACTION_SET_NAME.equals(cdvPlugin.getAction())) {
-                        Filepicker.setAppName(cdvPlugin.getArgs().getString(0));
-                        return;
-                    }
-
-                    Context context = cordova.getActivity().getApplicationContext();
-                    Intent intent = new Intent(context, Filepicker.class);
-                    if (ACTION_PICK.equals(cdvPlugin.getAction()) || ACTION_PICK_AND_STORE.equals(cdvPlugin.getAction())) {
-                        parseGlobalArgs(intent, cdvPlugin.getArgs());
-                        if (ACTION_PICK_AND_STORE.equals(cdvPlugin.getAction())) {
-                            parseStoreArgs(intent, cdvPlugin.getArgs());
-                        }
-                        cordova.startActivityForResult(cdvPlugin, intent, Filepicker.REQUEST_CODE_GETFILE);  
-                    }
+        this.cordova.getThreadPool().execute(() -> {
+            try {
+                if (ACTION_SET_KEY.equals(cdvPlugin.getAction())) {
+                    this.apiKey = cdvPlugin.getArgs().getString(0);
+                    return;
                 }
-                catch(JSONException exception) {
-                    cdvPlugin.getCallbackContext().error("cannot parse json");
+
+                Context context = cordova.getActivity().getApplicationContext();
+                Intent intent = new Intent(context, FsActivity.class);
+                Config config = new Config(this.apiKey);
+                intent.putExtra(FsConstants.EXTRA_CONFIG, config);
+                intent.putExtra(FsConstants.EXTRA_AUTO_UPLOAD, true);
+                if (ACTION_PICK.equals(cdvPlugin.getAction()) || ACTION_PICK_AND_STORE.equals(cdvPlugin.getAction())) {
+                    parseGlobalArgs(intent, cdvPlugin.getArgs());
+                    if (ACTION_PICK_AND_STORE.equals(cdvPlugin.getAction())) {
+                        parseStoreArgs(intent, cdvPlugin.getArgs());
+                    }
+                    cordova.startActivityForResult(cdvPlugin, intent, REQUEST_FILESTACK);
                 }
             }
-        });  
+            catch(JSONException exception) {
+                cdvPlugin.getCallbackContext().error("cannot parse json");
+            }
+        });
     }
 
     @Override
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
-        if (requestCode == Filepicker.REQUEST_CODE_GETFILE) {
+        if (requestCode == REQUEST_FILESTACK) {
             if (resultCode == Activity.RESULT_OK) {
-                ArrayList<FPFile> fpFiles = data.getParcelableArrayListExtra(Filepicker.FPFILES_EXTRA);
+                ArrayList<Selection> selections = data.getParcelableArrayListExtra(FsConstants.EXTRA_SELECTION_LIST);
                 try{
-                    callbackContext.success(toJSON(fpFiles)); // Filepicker always returns array of FPFile objects
+                    callbackContext.success(toJSON(selections));
                 }
                 catch(JSONException exception) {
                     callbackContext.error("json exception");
@@ -186,17 +186,16 @@ public class FilePickerIO extends CordovaPlugin {
         return a;
     }
 
-    public JSONArray toJSON(ArrayList<FPFile> fpFiles) throws JSONException {
+    public JSONArray toJSON(ArrayList<Selection> selections) throws JSONException {
         JSONArray res = new JSONArray();
-        for (FPFile fpFile : fpFiles) {
+        for (Selection selection : selections) {
             JSONObject f = new JSONObject();
-            f.put("container", fpFile.getContainer());
-            f.put("url", fpFile.getUrl());
-            f.put("filename", fpFile.getFilename());
-            f.put("key", fpFile.getKey());
-            f.put("mimetype", fpFile.getType());
-            f.put("localPath", fpFile.getLocalPath());
-            f.put("size", fpFile.getSize());
+            f.put("provider", selection.getProvider());
+            f.put("url", selection.getUri());
+            f.put("filename", selection.getName());
+            f.put("mimetype", selection.getMimeType());
+            f.put("localPath", selection.getPath());
+            f.put("size", selection.getSize());
 
             res.put(f);
         }
